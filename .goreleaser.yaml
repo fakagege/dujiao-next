@@ -45,7 +45,8 @@ changelog:
 
 release:
   footer: >-
-
     ---
-
-    Released by [GoReleaser](https://github.com/goreleaser/goreleaser).
+    
+    ## 📚 Documentation（在线文档）
+    - [Installation Guide](https://dujiao-next.com/deploy/)
+    - [部署指南](https://dujiao-next.com/deploy/)
