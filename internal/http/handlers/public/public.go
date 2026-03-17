@@ -78,6 +78,7 @@ func (h *Handler) GetConfig(c *gin.Context) {
 
 	var cached map[string]interface{}
 	if hit, err := cache.GetJSON(c.Request.Context(), publicConfigCacheKey, &cached); err == nil && hit {
+		cached["server_time"] = time.Now().UnixMilli()
 		response.Success(c, cached)
 		return
 	}
@@ -139,6 +140,7 @@ func (h *Handler) GetConfig(c *gin.Context) {
 	data["affiliate"] = service.AffiliateSettingToMap(affiliateSetting)
 
 	_ = cache.SetJSON(c.Request.Context(), publicConfigCacheKey, data, publicConfigCacheTTL)
+	data["server_time"] = time.Now().UnixMilli()
 	response.Success(c, data)
 }
 
