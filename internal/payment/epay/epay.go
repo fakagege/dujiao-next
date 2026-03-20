@@ -33,8 +33,10 @@ const (
 	epaySignTypeRSA = "RSA"
 	epaySignTypeMD5 = "MD5"
 
-	epayAPIPathV2 = "/api/pay/create"
-	epayAPIPathV1 = "/mapi.php"
+	epayAPIPathV2    = "/api/pay/create"
+	epayAPIPathV1    = "/mapi.php"
+	epaySubmitPathV2 = "/api/pay/submit"
+	epaySubmitPathV1 = "/submit.php"
 
 	epayMethodWeb = "web"
 	epayDevicePC  = "pc"
@@ -156,6 +158,35 @@ func CreatePayment(ctx context.Context, cfg *Config, input CreateInput) (*Create
 	}
 }
 
+// BuildRedirectURL 构造易支付页面跳转链接。
+func BuildRedirectURL(cfg *Config, input CreateInput) (*CreateResult, error) {
+	if cfg == nil {
+		return nil, ErrConfigInvalid
+	}
+	if input.OrderNo == "" || input.Amount == "" {
+		return nil, ErrConfigInvalid
+	}
+	if input.NotifyURL == "" || input.ReturnURL == "" {
+		return nil, ErrConfigInvalid
+	}
+	if cfg.GatewayURL == "" || cfg.MerchantID == "" {
+		return nil, ErrConfigInvalid
+	}
+	if input.Subject == "" {
+		input.Subject = input.OrderNo
+	}
+	payType := resolvePayType(input.ChannelType)
+	if payType == "" {
+		return nil, ErrChannelTypeNotOK
+	}
+	switch cfg.EpayVersion {
+	case VersionV2:
+		return buildRedirectV2(cfg, input, payType)
+	default:
+		return buildRedirectV1(cfg, input, payType)
+	}
+}
+
 func (c *Config) Normalize() {
 	c.EpayVersion = strings.ToLower(strings.TrimSpace(c.EpayVersion))
 	c.SignType = strings.TrimSpace(c.SignType)
@@ -236,6 +267,29 @@ func createV1(ctx context.Context, cfg *Config, input CreateInput, payType strin
 		result.PayURL = strings.TrimSpace(resp.URLScheme)
 	}
 	return result, nil
+}
+
+func buildRedirectV1(cfg *Config, input CreateInput, payType string) (*CreateResult, error) {
+	if cfg.MerchantKey == "" {
+		return nil, ErrConfigInvalid
+	}
+	params := map[string]string{
+		"pid":          cfg.MerchantID,
+		"type":         payType,
+		"out_trade_no": input.OrderNo,
+		"notify_url":   input.NotifyURL,
+		"return_url":   input.ReturnURL,
+		"name":         input.Subject,
+		"money":        input.Amount,
+	}
+	if input.Param != "" {
+		params["param"] = input.Param
+	}
+	signContent := buildSignContent(params)
+	params["sign"] = signMD5(signContent + cfg.MerchantKey)
+	params["sign_type"] = cfg.SignType
+	endpoint := buildEndpoint(cfg.GatewayURL, epaySubmitPathV1)
+	return buildRedirectResult(endpoint, payType, params), nil
 }
 
 // VerifyCallback 验证易支付回调签名
@@ -329,6 +383,35 @@ func createV2(ctx context.Context, cfg *Config, input CreateInput, payType strin
 	return result, nil
 }
 
+func buildRedirectV2(cfg *Config, input CreateInput, payType string) (*CreateResult, error) {
+	if cfg.PrivateKey == "" {
+		return nil, ErrConfigInvalid
+	}
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	params := map[string]string{
+		"pid":          cfg.MerchantID,
+		"type":         payType,
+		"out_trade_no": input.OrderNo,
+		"notify_url":   input.NotifyURL,
+		"return_url":   input.ReturnURL,
+		"name":         input.Subject,
+		"money":        input.Amount,
+		"timestamp":    timestamp,
+	}
+	if input.Param != "" {
+		params["param"] = input.Param
+	}
+	signContent := buildSignContent(params)
+	sign, err := signRSA(signContent, cfg.PrivateKey)
+	if err != nil {
+		return nil, ErrSignatureGenerate
+	}
+	params["sign"] = sign
+	params["sign_type"] = cfg.SignType
+	endpoint := buildEndpoint(cfg.GatewayURL, epaySubmitPathV2)
+	return buildRedirectResult(endpoint, payType, params), nil
+}
+
 func resolvePayType(channelType string) string {
 	switch strings.ToLower(strings.TrimSpace(channelType)) {
 	case constants.PaymentChannelTypeWechat, constants.PaymentChannelTypeWxpay:
@@ -357,6 +440,34 @@ func buildEndpoint(gatewayURL, apiPath string) string {
 		path = "/" + path
 	}
 	return base + path
+}
+
+func buildRedirectResult(endpoint, payType string, params map[string]string) *CreateResult {
+	values := url.Values{}
+	for key, value := range params {
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
+		values.Set(key, value)
+	}
+	redirectURL := endpoint
+	encoded := values.Encode()
+	if encoded != "" {
+		redirectURL += "?" + encoded
+	}
+	rawParams := make(map[string]interface{}, len(params))
+	for key, value := range params {
+		rawParams[key] = value
+	}
+	return &CreateResult{
+		PayURL:  redirectURL,
+		PayType: payType,
+		Raw: map[string]interface{}{
+			"mode":     constants.PaymentInteractionRedirect,
+			"endpoint": endpoint,
+			"params":   rawParams,
+		},
+	}
 }
 
 func postForm(ctx context.Context, endpoint string, params map[string]string) ([]byte, error) {

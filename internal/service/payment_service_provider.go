@@ -60,7 +60,7 @@ func (s *PaymentService) applyProviderPayment(input CreatePaymentInput, order *m
 		returnURL := appendURLQuery(cfg.ReturnURL, buildOrderReturnQuery(order, "epay_return", ""))
 		subject := buildOrderSubject(order)
 		param := strconv.FormatUint(uint64(payment.ID), 10)
-		result, err := epay.CreatePayment(gatewayCtx, cfg, epay.CreateInput{
+		createInput := epay.CreateInput{
 			OrderNo:     providerOrderNo,
 			PaymentID:   payment.ID,
 			Amount:      payment.Amount.String(),
@@ -70,10 +70,36 @@ func (s *PaymentService) applyProviderPayment(input CreatePaymentInput, order *m
 			NotifyURL:   notifyURL,
 			ReturnURL:   returnURL,
 			Param:       param,
-		})
+		}
 		if notifyURL == "" || returnURL == "" {
 			return fmt.Errorf("%w: notify_url/return_url is required", ErrPaymentChannelConfigInvalid)
 		}
+		mode := strings.ToLower(strings.TrimSpace(channel.InteractionMode))
+		if mode == constants.PaymentInteractionRedirect {
+			result, err := epay.BuildRedirectURL(cfg, createInput)
+			if err != nil {
+				switch {
+				case errors.Is(err, epay.ErrConfigInvalid), errors.Is(err, epay.ErrChannelTypeNotOK), errors.Is(err, epay.ErrSignatureGenerate):
+					return fmt.Errorf("%w: %v", ErrPaymentChannelConfigInvalid, err)
+				default:
+					return ErrPaymentGatewayRequestFailed
+				}
+			}
+			payment.PayURL = result.PayURL
+			payment.QRCode = ""
+			if result.Raw != nil {
+				payment.ProviderPayload = models.JSON(result.Raw)
+			}
+			payment.UpdatedAt = time.Now()
+			if err := s.paymentRepo.Update(payment); err != nil {
+				return ErrPaymentUpdateFailed
+			}
+			return nil
+		}
+		if mode != "" && mode != constants.PaymentInteractionQR {
+			return ErrPaymentChannelConfigInvalid
+		}
+		result, err := epay.CreatePayment(gatewayCtx, cfg, createInput)
 		if err != nil {
 			switch {
 			case errors.Is(err, epay.ErrConfigInvalid), errors.Is(err, epay.ErrChannelTypeNotOK), errors.Is(err, epay.ErrSignatureGenerate):
@@ -391,6 +417,10 @@ func (s *PaymentService) ValidateChannel(channel *models.PaymentChannel) error {
 	case constants.PaymentProviderEpay:
 		if !epay.IsSupportedChannelType(channel.ChannelType) {
 			return fmt.Errorf("%w: unsupported channel_type %s", ErrPaymentChannelConfigInvalid, channel.ChannelType)
+		}
+		mode := strings.ToLower(strings.TrimSpace(channel.InteractionMode))
+		if mode != constants.PaymentInteractionQR && mode != constants.PaymentInteractionRedirect {
+			return ErrPaymentChannelConfigInvalid
 		}
 		cfg, err := epay.ParseConfig(channel.ConfigJSON)
 		if err != nil {

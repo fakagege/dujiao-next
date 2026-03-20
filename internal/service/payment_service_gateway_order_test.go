@@ -200,6 +200,108 @@ func TestApplyProviderPaymentUsesGatewayOrderNoForEpusdt(t *testing.T) {
 	}
 }
 
+func TestApplyProviderPaymentBuildsRedirectURLForEpay(t *testing.T) {
+	svc, db := setupPaymentServiceWalletTest(t)
+	now := time.Now()
+
+	order := &models.Order{
+		OrderNo:                 "DJTESTEPAYREDIRECT001",
+		UserID:                  1,
+		Status:                  constants.OrderStatusPendingPayment,
+		Currency:                "CNY",
+		OriginalAmount:          models.NewMoneyFromDecimal(decimal.NewFromInt(20)),
+		DiscountAmount:          models.NewMoneyFromDecimal(decimal.Zero),
+		PromotionDiscountAmount: models.NewMoneyFromDecimal(decimal.Zero),
+		TotalAmount:             models.NewMoneyFromDecimal(decimal.NewFromInt(20)),
+		WalletPaidAmount:        models.NewMoneyFromDecimal(decimal.Zero),
+		OnlinePaidAmount:        models.NewMoneyFromDecimal(decimal.NewFromInt(20)),
+		RefundedAmount:          models.NewMoneyFromDecimal(decimal.Zero),
+		CreatedAt:               now,
+		UpdatedAt:               now,
+	}
+	if err := db.Create(order).Error; err != nil {
+		t.Fatalf("create order failed: %v", err)
+	}
+
+	channel := &models.PaymentChannel{
+		ProviderType:    constants.PaymentProviderEpay,
+		ChannelType:     constants.PaymentChannelTypeAlipay,
+		InteractionMode: constants.PaymentInteractionRedirect,
+		FeeRate:         models.NewMoneyFromDecimal(decimal.Zero),
+		ConfigJSON: models.JSON{
+			"gateway_url":  "https://gateway.example.com",
+			"epay_version": "v1",
+			"merchant_id":  "1001",
+			"merchant_key": "key-001",
+			"notify_url":   "https://api.example.com/api/v1/payments/callback",
+			"return_url":   "https://shop.example.com/pay",
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := db.Create(channel).Error; err != nil {
+		t.Fatalf("create channel failed: %v", err)
+	}
+
+	payment := &models.Payment{
+		OrderID:         order.ID,
+		ChannelID:       channel.ID,
+		ProviderType:    channel.ProviderType,
+		ChannelType:     channel.ChannelType,
+		InteractionMode: channel.InteractionMode,
+		Amount:          models.NewMoneyFromDecimal(decimal.RequireFromString("20.00")),
+		FeeRate:         models.NewMoneyFromDecimal(decimal.Zero),
+		FeeAmount:       models.NewMoneyFromDecimal(decimal.Zero),
+		Currency:        "CNY",
+		Status:          constants.PaymentStatusInitiated,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := db.Create(payment).Error; err != nil {
+		t.Fatalf("create payment failed: %v", err)
+	}
+
+	if err := svc.applyProviderPayment(CreatePaymentInput{
+		ClientIP: "127.0.0.1",
+		Context:  context.Background(),
+	}, order, channel, payment); err != nil {
+		t.Fatalf("applyProviderPayment redirect failed: %v", err)
+	}
+
+	if payment.PayURL == "" {
+		t.Fatalf("pay url should not be empty")
+	}
+	if !strings.HasPrefix(payment.PayURL, "https://gateway.example.com/submit.php?") {
+		t.Fatalf("unexpected pay url: %s", payment.PayURL)
+	}
+	if payment.QRCode != "" {
+		t.Fatalf("qr code should stay empty in redirect mode")
+	}
+	if payment.ProviderPayload == nil {
+		t.Fatalf("provider payload should be recorded")
+	}
+}
+
+func TestValidateChannelRejectsInvalidEpayInteractionMode(t *testing.T) {
+	svc, _ := setupPaymentServiceWalletTest(t)
+	channel := &models.PaymentChannel{
+		ProviderType:    constants.PaymentProviderEpay,
+		ChannelType:     constants.PaymentChannelTypeWechat,
+		InteractionMode: constants.PaymentInteractionPage,
+		ConfigJSON: models.JSON{
+			"gateway_url":  "https://gateway.example.com",
+			"epay_version": "v1",
+			"merchant_id":  "1001",
+			"merchant_key": "key-001",
+			"notify_url":   "https://api.example.com/api/v1/payments/callback",
+			"return_url":   "https://shop.example.com/pay",
+		},
+	}
+	if err := svc.ValidateChannel(channel); err == nil {
+		t.Fatalf("ValidateChannel should reject invalid epay interaction mode")
+	}
+}
+
 func TestHandleCallbackAcceptsGatewayOrderNoForOrderPayment(t *testing.T) {
 	svc, db := setupPaymentServiceWalletTest(t)
 	now := time.Now()
