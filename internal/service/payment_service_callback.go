@@ -708,6 +708,8 @@ func (s *PaymentService) enqueueManualFulfillmentPendingAsync(order *models.Orde
 func (s *PaymentService) buildOrderNotificationPayload(order *models.Order, payment *models.Payment) models.JSON {
 	locale := s.notificationTemplateLocale()
 	customerEmail, customerLabel, customerType := s.resolveNotificationCustomer(order)
+	// 父订单拆单时商品项可能只存在于子订单，通知变量需先补齐聚合商品明细。
+	fillOrderItemsFromChildren(order)
 	itemsSummary, fulfillmentItemsSummary, counts := buildNotificationOrderItemSummaries(order.Items, locale)
 	providerType, channelType, paymentChannel := notificationPaymentChannel(order, payment)
 

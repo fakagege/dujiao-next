@@ -125,6 +125,94 @@ func TestBuildOrderNotificationPayloadIncludesCustomerAndItemSummary(t *testing.
 	}
 }
 
+func TestBuildOrderNotificationPayloadFallsBackToChildrenItems(t *testing.T) {
+	repo := newMockSettingRepo()
+	repo.store[constants.SettingKeyNotificationCenterConfig] = models.JSON{
+		"default_locale": "en-US",
+	}
+
+	svc := &PaymentService{
+		settingService: NewSettingService(repo),
+	}
+	order := &models.Order{
+		ID:          2001,
+		OrderNo:     "DJ202603230201",
+		Currency:    "usd",
+		Status:      constants.OrderStatusPaid,
+		TotalAmount: models.NewMoneyFromDecimal(decimal.NewFromInt(42)),
+		Children: []models.Order{
+			{
+				ID: 2002,
+				Items: []models.OrderItem{
+					{
+						OrderID: 2002,
+						TitleJSON: models.JSON{
+							"zh-CN": "上游交付商品",
+							"en-US": "Upstream Product",
+						},
+						SKUSnapshotJSON: models.JSON{
+							"sku_code": "UPSTREAM-001",
+							"spec_values": models.JSON{
+								"zh-CN": "节点: SG",
+								"en-US": "Node: SG",
+							},
+						},
+						Quantity:        1,
+						FulfillmentType: constants.FulfillmentTypeUpstream,
+					},
+				},
+			},
+			{
+				ID: 2003,
+				Items: []models.OrderItem{
+					{
+						OrderID: 2003,
+						TitleJSON: models.JSON{
+							"zh-CN": "人工交付商品",
+							"en-US": "Manual Product",
+						},
+						SKUSnapshotJSON: models.JSON{
+							"sku_code": "MANUAL-003",
+							"spec_values": models.JSON{
+								"zh-CN": "周期: 7天",
+								"en-US": "Cycle: 7 days",
+							},
+						},
+						Quantity:        2,
+						FulfillmentType: constants.FulfillmentTypeManual,
+					},
+				},
+			},
+		},
+	}
+
+	payload := svc.buildOrderNotificationPayload(order, nil)
+
+	itemsSummary := fmt.Sprintf("%v", payload["items_summary"])
+	if !strings.Contains(itemsSummary, "Upstream Product / Node: SG x1 [Upstream]") {
+		t.Fatalf("items_summary missing child upstream item detail: %s", itemsSummary)
+	}
+	if !strings.Contains(itemsSummary, "Manual Product / Cycle: 7 days x2 [Manual]") {
+		t.Fatalf("items_summary missing child manual item detail: %s", itemsSummary)
+	}
+
+	fulfillmentSummary := fmt.Sprintf("%v", payload["fulfillment_items_summary"])
+	if !strings.Contains(fulfillmentSummary, "Upstream Product / Node: SG x1 [Upstream]") {
+		t.Fatalf("fulfillment_items_summary missing child upstream item detail: %s", fulfillmentSummary)
+	}
+	if !strings.Contains(fulfillmentSummary, "Manual Product / Cycle: 7 days x2 [Manual]") {
+		t.Fatalf("fulfillment_items_summary missing child manual item detail: %s", fulfillmentSummary)
+	}
+
+	deliverySummary := fmt.Sprintf("%v", payload["delivery_summary"])
+	if deliverySummary != "Total 2 items, auto 0, manual 1, upstream 1" {
+		t.Fatalf("unexpected delivery_summary from child items: %s", deliverySummary)
+	}
+	if got := len(order.Items); got != 2 {
+		t.Fatalf("expected parent order items to be filled from children, got %d", got)
+	}
+}
+
 func TestBuildManualFulfillmentNotificationPayloadUsesGuestEmailAndPendingItems(t *testing.T) {
 	svc := &PaymentService{}
 	order := &models.Order{
