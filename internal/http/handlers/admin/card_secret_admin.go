@@ -16,17 +16,20 @@ import (
 
 // CreateCardSecretBatchRequest 批量录入卡密请求
 type CreateCardSecretBatchRequest struct {
-	ProductID uint     `json:"product_id" binding:"required"`
-	SKUID     uint     `json:"sku_id"`
-	Secrets   []string `json:"secrets" binding:"required"`
-	BatchNo   string   `json:"batch_no"`
-	Note      string   `json:"note"`
+	ProductID    uint     `json:"product_id" binding:"required"`
+	SKUID        uint     `json:"sku_id"`
+	Secrets      []string `json:"secrets" binding:"required"`
+	IsSelectable bool     `json:"is_selectable"`
+	BatchNo      string   `json:"batch_no"`
+	Note         string   `json:"note"`
 }
 
 // UpdateCardSecretRequest 更新卡密请求
 type UpdateCardSecretRequest struct {
-	Secret *string `json:"secret"`
-	Status *string `json:"status"`
+	Secret        *string `json:"secret"`
+	DisplaySecret *string `json:"display_secret"`
+	IsSelectable  *bool   `json:"is_selectable"`
+	Status        *string `json:"status"`
 }
 
 // CardSecretQueryRequest 卡密查询条件
@@ -89,13 +92,14 @@ func (h *Handler) CreateCardSecretBatch(c *gin.Context) {
 	}
 
 	batch, created, err := h.CardSecretService.CreateCardSecretBatch(service.CreateCardSecretBatchInput{
-		ProductID: req.ProductID,
-		SKUID:     req.SKUID,
-		Secrets:   req.Secrets,
-		BatchNo:   req.BatchNo,
-		Note:      req.Note,
-		Source:    constants.CardSecretSourceManual,
-		AdminID:   adminID,
+		ProductID:    req.ProductID,
+		SKUID:        req.SKUID,
+		Secrets:      req.Secrets,
+		IsSelectable: req.IsSelectable,
+		BatchNo:      req.BatchNo,
+		Note:         req.Note,
+		Source:       constants.CardSecretSourceManual,
+		AdminID:      adminID,
 	})
 	if err != nil {
 		switch {
@@ -103,6 +107,8 @@ func (h *Handler) CreateCardSecretBatch(c *gin.Context) {
 			shared.RespondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
 		case errors.Is(err, service.ErrProductSKUInvalid):
 			shared.RespondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
+		case errors.Is(err, service.ErrCardSecretSelectionConflict):
+			shared.RespondError(c, response.CodeBadRequest, "error.card_secret_selection_conflict", nil)
 		case errors.Is(err, service.ErrCardSecretInvalid):
 			shared.RespondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
 		case errors.Is(err, service.ErrProductNotFound):
@@ -147,14 +153,16 @@ func (h *Handler) ImportCardSecretCSV(c *gin.Context) {
 	}
 	batchNo := strings.TrimSpace(c.PostForm("batch_no"))
 	note := strings.TrimSpace(c.PostForm("note"))
+	isSelectable := strings.EqualFold(strings.TrimSpace(c.DefaultPostForm("is_selectable", "false")), "true")
 
 	batch, created, err := h.CardSecretService.ImportCardSecretCSV(service.ImportCardSecretCSVInput{
-		ProductID: productID,
-		SKUID:     skuID,
-		File:      file,
-		BatchNo:   batchNo,
-		Note:      note,
-		AdminID:   adminID,
+		ProductID:    productID,
+		SKUID:        skuID,
+		File:         file,
+		IsSelectable: isSelectable,
+		BatchNo:      batchNo,
+		Note:         note,
+		AdminID:      adminID,
 	})
 	if err != nil {
 		switch {
@@ -162,6 +170,8 @@ func (h *Handler) ImportCardSecretCSV(c *gin.Context) {
 			shared.RespondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
 		case errors.Is(err, service.ErrProductSKUInvalid):
 			shared.RespondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
+		case errors.Is(err, service.ErrCardSecretSelectionConflict):
+			shared.RespondError(c, response.CodeBadRequest, "error.card_secret_selection_conflict", nil)
 		case errors.Is(err, service.ErrCardSecretInvalid):
 			shared.RespondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
 		case errors.Is(err, service.ErrProductNotFound):
@@ -272,16 +282,22 @@ func (h *Handler) UpdateCardSecret(c *gin.Context) {
 	if req.Status != nil {
 		status = *req.Status
 	}
-	if strings.TrimSpace(secret) == "" && strings.TrimSpace(status) == "" {
+	displaySecret := ""
+	if req.DisplaySecret != nil {
+		displaySecret = *req.DisplaySecret
+	}
+	if strings.TrimSpace(secret) == "" && strings.TrimSpace(displaySecret) == "" && req.IsSelectable == nil && strings.TrimSpace(status) == "" {
 		shared.RespondError(c, response.CodeBadRequest, "error.bad_request", nil)
 		return
 	}
 
-	item, err := h.CardSecretService.UpdateCardSecret(rawID, secret, status)
+	item, err := h.CardSecretService.UpdateCardSecret(rawID, secret, status, displaySecret, req.IsSelectable)
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrNotFound):
 			shared.RespondError(c, response.CodeNotFound, "error.card_secret_not_found", nil)
+		case errors.Is(err, service.ErrCardSecretSelectionConflict):
+			shared.RespondError(c, response.CodeBadRequest, "error.card_secret_selection_conflict", nil)
 		case errors.Is(err, service.ErrCardSecretInvalid):
 			shared.RespondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
 		case errors.Is(err, service.ErrCardSecretUpdateFailed):

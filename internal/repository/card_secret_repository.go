@@ -12,14 +12,15 @@ import (
 
 // CardSecretListFilter 卡密列表筛选条件
 type CardSecretListFilter struct {
-	ProductID uint
-	SKUID     uint
-	BatchID   uint
-	Status    string
-	Secret    string
-	BatchNo   string
-	Page      int
-	PageSize  int
+	ProductID      uint
+	SKUID          uint
+	BatchID        uint
+	Status         string
+	Secret         string
+	BatchNo        string
+	SelectableOnly bool
+	Page           int
+	PageSize       int
 }
 
 // CardSecretBatchStatusCount 批次状态统计结果
@@ -44,6 +45,7 @@ type CardSecretRepository interface {
 	BatchDeleteByIDs(ids []uint) (int64, error)
 	CountByProduct(productID, skuID uint) (int64, int64, int64, error)
 	CountAvailable(productID, skuID uint) (int64, error)
+	CountActiveBySelectable(productID, skuID uint, selectable bool, excludeID uint) (int64, error)
 	CountAvailableByProductIDs(productIDs []uint) (map[uint]int64, error)
 	CountReserved(productID, skuID uint) (int64, error)
 	CountStockByProductIDs(productIDs []uint) ([]SKUStockCount, error)
@@ -102,8 +104,15 @@ func (r *GormCardSecretRepository) buildListQuery(filter CardSecretListFilter) *
 	if filter.BatchID > 0 {
 		query = query.Where("card_secrets.batch_id = ?", filter.BatchID)
 	}
+	if filter.SelectableOnly {
+		query = query.Where("card_secrets.is_selectable = ?", true)
+	}
 	if secret := strings.TrimSpace(filter.Secret); secret != "" {
-		query = query.Where("LOWER(card_secrets.secret) LIKE LOWER(?)", "%"+secret+"%")
+		query = query.Where(
+			"LOWER(card_secrets.secret) LIKE LOWER(?) OR LOWER(card_secrets.display_secret) LIKE LOWER(?)",
+			"%"+secret+"%",
+			"%"+secret+"%",
+		)
 	}
 	if batchNo := strings.TrimSpace(filter.BatchNo); batchNo != "" {
 		query = query.Joins("LEFT JOIN card_secret_batches ON card_secret_batches.id = card_secrets.batch_id").
@@ -288,6 +297,26 @@ func (r *GormCardSecretRepository) CountAvailable(productID, skuID uint) (int64,
 	var count int64
 	if err := query.
 		Count(&count).Error; err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// CountActiveBySelectable 统计可用/占用中的自选或普通卡密数量
+func (r *GormCardSecretRepository) CountActiveBySelectable(productID, skuID uint, selectable bool, excludeID uint) (int64, error) {
+	if productID == 0 {
+		return 0, errors.New("invalid product id")
+	}
+	query := r.db.Model(&models.CardSecret{}).
+		Where("product_id = ? AND status IN ? AND is_selectable = ?", productID, []string{models.CardSecretStatusAvailable, models.CardSecretStatusReserved}, selectable)
+	if skuID > 0 {
+		query = query.Where("sku_id = ?", skuID)
+	}
+	if excludeID > 0 {
+		query = query.Where("id <> ?", excludeID)
+	}
+	var count int64
+	if err := query.Count(&count).Error; err != nil {
 		return 0, err
 	}
 	return count, nil

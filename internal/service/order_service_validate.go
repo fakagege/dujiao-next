@@ -86,6 +86,19 @@ func (s *OrderService) buildOrderResult(input orderCreateParams) (*orderBuildRes
 		if err != nil {
 			return nil, err
 		}
+		selectedSecrets, err := s.resolveSelectedSecrets(product, sku, item)
+		if err != nil {
+			return nil, err
+		}
+		selectedMarkupUnit := decimal.Zero
+		selectedSecretSnapshot := models.JSON{}
+		if len(selectedSecrets) > 0 {
+			selectedMarkupUnit = product.SecretSelectionMarkup.Decimal.Round(2)
+			if selectedMarkupUnit.LessThan(decimal.Zero) {
+				return nil, ErrProductPriceInvalid
+			}
+			selectedSecretSnapshot = buildSelectedSecretSnapshot(selectedSecrets, models.NewMoneyFromDecimal(selectedMarkupUnit))
+		}
 
 		productCurrency := currency
 		basePrice := sku.PriceAmount.Decimal.Round(2)
@@ -128,8 +141,9 @@ func (s *OrderService) buildOrderResult(input orderCreateParams) (*orderBuildRes
 		if unitPriceAmount.LessThanOrEqual(decimal.Zero) || productCurrency == "" {
 			return nil, ErrProductPriceInvalid
 		}
+		unitPriceAmount = unitPriceAmount.Add(selectedMarkupUnit).Round(2)
 
-		baseTotal := basePrice.Mul(decimal.NewFromInt(int64(item.Quantity))).Round(2)
+		baseTotal := basePrice.Add(selectedMarkupUnit).Mul(decimal.NewFromInt(int64(item.Quantity))).Round(2)
 		total := unitPriceAmount.Mul(decimal.NewFromInt(int64(item.Quantity))).Round(2)
 		originalAmount = originalAmount.Add(baseTotal).Round(2)
 		fulfillmentType := strings.TrimSpace(product.FulfillmentType)
@@ -192,6 +206,7 @@ func (s *OrderService) buildOrderResult(input orderCreateParams) (*orderBuildRes
 			PromotionDiscount:            models.NewMoneyFromDecimal(promotionDiscount),
 			PromotionID:                  promotionID,
 			FulfillmentType:              fulfillmentType,
+			SelectedSecretSnapshotJSON:   selectedSecretSnapshot,
 			ManualFormSchemaSnapshotJSON: manualSchemaSnapshot,
 			ManualFormSubmissionJSON:     manualSubmission,
 			CreatedAt:                    now,
@@ -201,6 +216,7 @@ func (s *OrderService) buildOrderResult(input orderCreateParams) (*orderBuildRes
 		plans = append(plans, childOrderPlan{
 			Product:           product,
 			SKU:               sku,
+			SelectedSecrets:   selectedSecrets,
 			Item:              orderItem,
 			TotalAmount:       total,
 			MemberDiscount:    itemMemberDiscount,
@@ -332,16 +348,23 @@ func mergeCreateOrderItems(items []CreateOrderItem) ([]CreateOrderItem, error) {
 		if item.ProductID == 0 || item.Quantity <= 0 {
 			return nil, ErrInvalidOrderItem
 		}
-		key := buildOrderItemKey(item.ProductID, item.SKUID)
+		key, err := buildCreateOrderItemKey(item)
+		if err != nil {
+			return nil, err
+		}
 		if idx, ok := indexMap[key]; ok {
+			if len(item.SelectedSecretIDs) > 0 {
+				return nil, ErrInvalidOrderItem
+			}
 			merged[idx].Quantity += item.Quantity
 			continue
 		}
 		indexMap[key] = len(merged)
 		merged = append(merged, CreateOrderItem{
-			ProductID: item.ProductID,
-			SKUID:     item.SKUID,
-			Quantity:  item.Quantity,
+			ProductID:         item.ProductID,
+			SKUID:             item.SKUID,
+			Quantity:          item.Quantity,
+			SelectedSecretIDs: append([]uint(nil), item.SelectedSecretIDs...),
 		})
 	}
 	return merged, nil

@@ -258,6 +258,9 @@ func (s *FulfillmentService) CreateAuto(orderID uint) (*models.Fulfillment, erro
 			}
 
 			if len(selected) < item.Quantity {
+				if hasSelectedSecretSnapshot(item.SelectedSecretSnapshotJSON) {
+					return ErrCardSecretInsufficient
+				}
 				need := item.Quantity - len(selected)
 				var availableRows []models.CardSecret
 				query := tx.Where("product_id = ? AND status = ?", item.ProductID, models.CardSecretStatusAvailable)

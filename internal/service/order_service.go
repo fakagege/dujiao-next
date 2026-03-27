@@ -101,16 +101,18 @@ type CreateGuestOrderInput struct {
 
 // CreateOrderItem 创建订单项输入
 type CreateOrderItem struct {
-	ProductID       uint
-	SKUID           uint
-	Quantity        int
-	FulfillmentType string
+	ProductID         uint
+	SKUID             uint
+	Quantity          int
+	SelectedSecretIDs []uint
+	FulfillmentType   string
 }
 
 // childOrderPlan 子订单计划数据
 type childOrderPlan struct {
 	Product           *models.Product
 	SKU               *models.ProductSKU
+	SelectedSecrets   []models.CardSecret
 	Item              models.OrderItem
 	TotalAmount       decimal.Decimal
 	MemberDiscount    decimal.Decimal
@@ -422,17 +424,23 @@ func (s *OrderService) createOrder(input orderCreateParams) (*models.Order, erro
 					return ErrCardSecretInsufficient
 				}
 				secretRepo := s.cardSecretRepo.WithTx(tx)
-				var rows []models.CardSecret
-				if err := tx.Where("product_id = ? AND sku_id = ? AND status = ?", plan.Item.ProductID, plan.Item.SKUID, models.CardSecretStatusAvailable).
-					Order("id asc").Limit(plan.Item.Quantity).Find(&rows).Error; err != nil {
-					return err
-				}
-				if len(rows) < plan.Item.Quantity {
-					return ErrCardSecretInsufficient
-				}
-				ids := make([]uint, 0, len(rows))
-				for _, row := range rows {
-					ids = append(ids, row.ID)
+				ids := make([]uint, 0, plan.Item.Quantity)
+				if len(plan.SelectedSecrets) > 0 {
+					for _, secret := range plan.SelectedSecrets {
+						ids = append(ids, secret.ID)
+					}
+				} else {
+					var rows []models.CardSecret
+					if err := tx.Where("product_id = ? AND sku_id = ? AND status = ?", plan.Item.ProductID, plan.Item.SKUID, models.CardSecretStatusAvailable).
+						Order("id asc").Limit(plan.Item.Quantity).Find(&rows).Error; err != nil {
+						return err
+					}
+					if len(rows) < plan.Item.Quantity {
+						return ErrCardSecretInsufficient
+					}
+					for _, row := range rows {
+						ids = append(ids, row.ID)
+					}
 				}
 				affected, err := secretRepo.Reserve(ids, childOrder.ID, now)
 				if err != nil {

@@ -63,6 +63,12 @@ type PublicProductView struct {
 	IsSoldOut            bool                   `json:"is_sold_out"`
 }
 
+type SelectableCardSecretView struct {
+	ID            uint   `json:"id"`
+	SKUID         uint   `json:"sku_id"`
+	DisplaySecret string `json:"display_secret"`
+}
+
 // GetConfig 获取全局配置
 func (h *Handler) GetConfig(c *gin.Context) {
 	// 默认配置
@@ -268,6 +274,62 @@ func (h *Handler) GetProductBySlug(c *gin.Context) {
 	}
 
 	response.Success(c, decorated)
+}
+
+func (h *Handler) GetSelectableSecrets(c *gin.Context) {
+	slug := strings.TrimSpace(c.Param("slug"))
+	if slug == "" {
+		shared.RespondError(c, response.CodeBadRequest, "error.bad_request", nil)
+		return
+	}
+	var skuID uint
+	rawSKUID := strings.TrimSpace(c.Query("sku_id"))
+	if rawSKUID != "" {
+		parsed, err := shared.ParseQueryUint(rawSKUID, false)
+		if err != nil {
+			shared.RespondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
+			return
+		}
+		skuID = parsed
+	}
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	page, pageSize = shared.NormalizePagination(page, pageSize)
+
+	product, err := h.ProductService.GetPublicBySlug(slug)
+	if err != nil {
+		if errors.Is(err, service.ErrNotFound) {
+			shared.RespondError(c, response.CodeNotFound, "error.product_not_found", nil)
+			return
+		}
+		shared.RespondError(c, response.CodeInternal, "error.product_fetch_failed", err)
+		return
+	}
+	items, total, err := h.CardSecretService.ListSelectableCardSecrets(product.ID, skuID, page, pageSize)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrProductSKURequired):
+			shared.RespondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
+		case errors.Is(err, service.ErrProductSKUInvalid):
+			shared.RespondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
+		case errors.Is(err, service.ErrCardSecretInvalid):
+			shared.RespondError(c, response.CodeBadRequest, "error.card_secret_invalid", nil)
+		default:
+			shared.RespondError(c, response.CodeInternal, "error.card_secret_fetch_failed", err)
+		}
+		return
+	}
+
+	views := make([]SelectableCardSecretView, 0, len(items))
+	for _, item := range items {
+		views = append(views, SelectableCardSecretView{
+			ID:            item.ID,
+			SKUID:         item.SKUID,
+			DisplaySecret: item.DisplaySecret,
+		})
+	}
+	pagination := response.BuildPagination(page, pageSize, total)
+	response.SuccessWithPage(c, views, pagination)
 }
 
 func (h *Handler) decoratePublicProduct(product *models.Product, promotionService *service.PromotionService, userMemberLevelID ...uint) (PublicProductView, error) {
@@ -697,10 +759,11 @@ func (h *Handler) CreateGuestOrder(c *gin.Context) {
 	var items []service.CreateOrderItem
 	for _, item := range req.Items {
 		items = append(items, service.CreateOrderItem{
-			ProductID:       item.ProductID,
-			SKUID:           item.SKUID,
-			Quantity:        item.Quantity,
-			FulfillmentType: item.FulfillmentType,
+			ProductID:         item.ProductID,
+			SKUID:             item.SKUID,
+			Quantity:          item.Quantity,
+			SelectedSecretIDs: item.SelectedSecretIDs,
+			FulfillmentType:   item.FulfillmentType,
 		})
 	}
 	order, err := h.OrderService.CreateGuestOrder(service.CreateGuestOrderInput{
@@ -763,10 +826,11 @@ func (h *Handler) CreateGuestOrderAndPay(c *gin.Context) {
 	var items []service.CreateOrderItem
 	for _, item := range req.Items {
 		items = append(items, service.CreateOrderItem{
-			ProductID:       item.ProductID,
-			SKUID:           item.SKUID,
-			Quantity:        item.Quantity,
-			FulfillmentType: item.FulfillmentType,
+			ProductID:         item.ProductID,
+			SKUID:             item.SKUID,
+			Quantity:          item.Quantity,
+			SelectedSecretIDs: item.SelectedSecretIDs,
+			FulfillmentType:   item.FulfillmentType,
 		})
 	}
 	order, err := h.OrderService.CreateGuestOrder(service.CreateGuestOrderInput{
@@ -841,10 +905,11 @@ func (h *Handler) PreviewGuestOrder(c *gin.Context) {
 	var items []service.CreateOrderItem
 	for _, item := range req.Items {
 		items = append(items, service.CreateOrderItem{
-			ProductID:       item.ProductID,
-			SKUID:           item.SKUID,
-			Quantity:        item.Quantity,
-			FulfillmentType: item.FulfillmentType,
+			ProductID:         item.ProductID,
+			SKUID:             item.SKUID,
+			Quantity:          item.Quantity,
+			SelectedSecretIDs: item.SelectedSecretIDs,
+			FulfillmentType:   item.FulfillmentType,
 		})
 	}
 	preview, err := h.OrderService.PreviewGuestOrder(service.CreateGuestOrderInput{

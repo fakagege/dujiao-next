@@ -117,6 +117,7 @@ var (
 	ErrCardSecretInsufficient          = errors.New("card secret insufficient")
 	ErrFulfillmentNotAuto              = errors.New("fulfillment not auto")
 	ErrCardSecretInvalid               = errors.New("card secret invalid")
+	ErrCardSecretSelectionConflict     = errors.New("card secret selection conflict")
 	ErrCardSecretCreateFailed          = errors.New("card secret create failed")
 	ErrCardSecretFetchFailed           = errors.New("card secret fetch failed")
 	ErrCardSecretUpdateFailed          = errors.New("card secret update failed")

@@ -32,25 +32,27 @@ func NewProductService(repo repository.ProductRepository, productSKURepo reposit
 
 // CreateProductInput 创建/更新商品输入
 type CreateProductInput struct {
-	CategoryID           uint
-	Slug                 string
-	SeoMetaJSON          map[string]interface{}
-	TitleJSON            map[string]interface{}
-	DescriptionJSON      map[string]interface{}
-	ContentJSON          map[string]interface{}
-	ManualFormSchemaJSON map[string]interface{}
-	PriceAmount          decimal.Decimal
-	CostPriceAmount      decimal.Decimal
-	Images               []string
-	Tags                 []string
-	PurchaseType         string
-	MaxPurchaseQuantity  *int
-	FulfillmentType      string
-	ManualStockTotal     *int
-	SKUs                 []ProductSKUInput
-	IsAffiliateEnabled   *bool
-	IsActive             *bool
-	SortOrder            int
+	CategoryID                  uint
+	Slug                        string
+	SeoMetaJSON                 map[string]interface{}
+	TitleJSON                   map[string]interface{}
+	DescriptionJSON             map[string]interface{}
+	ContentJSON                 map[string]interface{}
+	ManualFormSchemaJSON        map[string]interface{}
+	PriceAmount                 decimal.Decimal
+	CostPriceAmount             decimal.Decimal
+	Images                      []string
+	Tags                        []string
+	PurchaseType                string
+	MaxPurchaseQuantity         *int
+	FulfillmentType             string
+	EnableSecretSelection       *bool
+	SecretSelectionMarkupAmount *decimal.Decimal
+	ManualStockTotal            *int
+	SKUs                        []ProductSKUInput
+	IsAffiliateEnabled          *bool
+	IsActive                    *bool
+	SortOrder                   int
 }
 
 type ProductSKUInput struct {
@@ -164,6 +166,21 @@ func (s *ProductService) Create(input CreateProductInput) (*models.Product, erro
 	if fulfillmentType == "" {
 		return nil, ErrFulfillmentInvalid
 	}
+	enableSecretSelection := false
+	if input.EnableSecretSelection != nil {
+		enableSecretSelection = *input.EnableSecretSelection
+	}
+	secretSelectionMarkup := decimal.Zero
+	if input.SecretSelectionMarkupAmount != nil {
+		secretSelectionMarkup = input.SecretSelectionMarkupAmount.Round(2)
+	}
+	if secretSelectionMarkup.LessThan(decimal.Zero) {
+		return nil, ErrProductPriceInvalid
+	}
+	if fulfillmentType != constants.FulfillmentTypeAuto {
+		enableSecretSelection = false
+		secretSelectionMarkup = decimal.Zero
+	}
 
 	priceAmount := input.PriceAmount.Round(2)
 	if len(input.SKUs) == 0 && priceAmount.LessThanOrEqual(decimal.Zero) {
@@ -198,26 +215,28 @@ func (s *ProductService) Create(input CreateProductInput) (*models.Product, erro
 	}
 
 	product := models.Product{
-		CategoryID:           input.CategoryID,
-		Slug:                 input.Slug,
-		SeoMetaJSON:          models.JSON(input.SeoMetaJSON),
-		TitleJSON:            models.JSON(input.TitleJSON),
-		DescriptionJSON:      models.JSON(input.DescriptionJSON),
-		ContentJSON:          models.JSON(input.ContentJSON),
-		ManualFormSchemaJSON: models.JSON{},
-		PriceAmount:          models.NewMoneyFromDecimal(priceAmount),
-		CostPriceAmount:      models.NewMoneyFromDecimal(costPriceAmount),
-		Images:               models.StringArray(input.Images),
-		Tags:                 models.StringArray(input.Tags),
-		PurchaseType:         purchaseType,
-		MaxPurchaseQuantity:  maxPurchaseQuantity,
-		FulfillmentType:      fulfillmentType,
-		ManualStockTotal:     manualStockTotal,
-		ManualStockLocked:    0,
-		ManualStockSold:      0,
-		IsAffiliateEnabled:   isAffiliateEnabled,
-		IsActive:             isActive,
-		SortOrder:            input.SortOrder,
+		CategoryID:            input.CategoryID,
+		Slug:                  input.Slug,
+		SeoMetaJSON:           models.JSON(input.SeoMetaJSON),
+		TitleJSON:             models.JSON(input.TitleJSON),
+		DescriptionJSON:       models.JSON(input.DescriptionJSON),
+		ContentJSON:           models.JSON(input.ContentJSON),
+		ManualFormSchemaJSON:  models.JSON{},
+		PriceAmount:           models.NewMoneyFromDecimal(priceAmount),
+		CostPriceAmount:       models.NewMoneyFromDecimal(costPriceAmount),
+		Images:                models.StringArray(input.Images),
+		Tags:                  models.StringArray(input.Tags),
+		PurchaseType:          purchaseType,
+		MaxPurchaseQuantity:   maxPurchaseQuantity,
+		FulfillmentType:       fulfillmentType,
+		EnableSecretSelection: enableSecretSelection,
+		SecretSelectionMarkup: models.NewMoneyFromDecimal(secretSelectionMarkup),
+		ManualStockTotal:      manualStockTotal,
+		ManualStockLocked:     0,
+		ManualStockSold:       0,
+		IsAffiliateEnabled:    isAffiliateEnabled,
+		IsActive:              isActive,
+		SortOrder:             input.SortOrder,
 	}
 	if fulfillmentType == constants.FulfillmentTypeManual {
 		_, normalizedSchemaJSON, err := parseManualFormSchema(models.JSON(input.ManualFormSchemaJSON))
@@ -318,6 +337,23 @@ func (s *ProductService) Update(id string, input CreateProductInput) (*models.Pr
 		fulfillmentType = constants.FulfillmentTypeUpstream
 	}
 	product.FulfillmentType = fulfillmentType
+	enableSecretSelection := product.EnableSecretSelection
+	if input.EnableSecretSelection != nil {
+		enableSecretSelection = *input.EnableSecretSelection
+	}
+	secretSelectionMarkup := product.SecretSelectionMarkup.Decimal.Round(2)
+	if input.SecretSelectionMarkupAmount != nil {
+		secretSelectionMarkup = input.SecretSelectionMarkupAmount.Round(2)
+	}
+	if secretSelectionMarkup.LessThan(decimal.Zero) {
+		return nil, ErrProductPriceInvalid
+	}
+	if fulfillmentType != constants.FulfillmentTypeAuto {
+		enableSecretSelection = false
+		secretSelectionMarkup = decimal.Zero
+	}
+	product.EnableSecretSelection = enableSecretSelection
+	product.SecretSelectionMarkup = models.NewMoneyFromDecimal(secretSelectionMarkup)
 	if fulfillmentType == constants.FulfillmentTypeManual {
 		_, normalizedSchemaJSON, err := parseManualFormSchema(models.JSON(input.ManualFormSchemaJSON))
 		if err != nil {

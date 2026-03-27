@@ -296,6 +296,140 @@ func TestCardSecretServiceSupportsBatchTargetOperations(t *testing.T) {
 	}
 }
 
+func TestCreateCardSecretBatchRejectsMixedSelectableInventory(t *testing.T) {
+	db := setupCardSecretServiceTestDB(t)
+
+	product := &models.Product{
+		CategoryID:      1,
+		Slug:            "card-secret-selection-conflict",
+		TitleJSON:       models.JSON{"zh-CN": "自选卡密冲突商品"},
+		PriceAmount:     models.NewMoneyFromDecimal(decimal.NewFromInt(50)),
+		PurchaseType:    constants.ProductPurchaseMember,
+		FulfillmentType: constants.FulfillmentTypeAuto,
+		IsActive:        true,
+	}
+	if err := db.Create(product).Error; err != nil {
+		t.Fatalf("create product failed: %v", err)
+	}
+	defaultSKU := &models.ProductSKU{
+		ProductID:   product.ID,
+		SKUCode:     models.DefaultSKUCode,
+		PriceAmount: models.NewMoneyFromDecimal(decimal.NewFromInt(50)),
+		IsActive:    true,
+	}
+	if err := db.Create(defaultSKU).Error; err != nil {
+		t.Fatalf("create sku failed: %v", err)
+	}
+
+	svc := NewCardSecretService(
+		repository.NewCardSecretRepository(db),
+		repository.NewCardSecretBatchRepository(db),
+		repository.NewProductRepository(db),
+		repository.NewProductSKURepository(db),
+	)
+
+	if _, created, err := svc.CreateCardSecretBatch(CreateCardSecretBatchInput{
+		ProductID: product.ID,
+		SKUID:     defaultSKU.ID,
+		Secrets:   []string{"REGULAR-001", "REGULAR-002"},
+	}); err != nil {
+		t.Fatalf("create regular batch failed: %v", err)
+	} else if created != 2 {
+		t.Fatalf("regular batch created want 2 got %d", created)
+	}
+
+	if _, _, err := svc.CreateCardSecretBatch(CreateCardSecretBatchInput{
+		ProductID:    product.ID,
+		SKUID:        defaultSKU.ID,
+		IsSelectable: true,
+		Secrets:      []string{"T10001---SECRET-001"},
+	}); err != ErrCardSecretSelectionConflict {
+		t.Fatalf("mixed selectable inventory error want %v got %v", ErrCardSecretSelectionConflict, err)
+	}
+}
+
+func TestCreateCardSecretBatchAllowsSelectionModeSwitchAfterActiveStockCleared(t *testing.T) {
+	db := setupCardSecretServiceTestDB(t)
+
+	product := &models.Product{
+		CategoryID:      1,
+		Slug:            "card-secret-selection-switch",
+		TitleJSON:       models.JSON{"zh-CN": "自选卡密切换商品"},
+		PriceAmount:     models.NewMoneyFromDecimal(decimal.NewFromInt(50)),
+		PurchaseType:    constants.ProductPurchaseMember,
+		FulfillmentType: constants.FulfillmentTypeAuto,
+		IsActive:        true,
+	}
+	if err := db.Create(product).Error; err != nil {
+		t.Fatalf("create product failed: %v", err)
+	}
+	defaultSKU := &models.ProductSKU{
+		ProductID:   product.ID,
+		SKUCode:     models.DefaultSKUCode,
+		PriceAmount: models.NewMoneyFromDecimal(decimal.NewFromInt(50)),
+		IsActive:    true,
+	}
+	if err := db.Create(defaultSKU).Error; err != nil {
+		t.Fatalf("create sku failed: %v", err)
+	}
+
+	secretRepo := repository.NewCardSecretRepository(db)
+	svc := NewCardSecretService(
+		secretRepo,
+		repository.NewCardSecretBatchRepository(db),
+		repository.NewProductRepository(db),
+		repository.NewProductSKURepository(db),
+	)
+
+	batch, created, err := svc.CreateCardSecretBatch(CreateCardSecretBatchInput{
+		ProductID: product.ID,
+		SKUID:     defaultSKU.ID,
+		Secrets:   []string{"REGULAR-101", "REGULAR-102"},
+	})
+	if err != nil {
+		t.Fatalf("create regular batch failed: %v", err)
+	}
+	if created != 2 {
+		t.Fatalf("regular batch created want 2 got %d", created)
+	}
+
+	affected, err := svc.BatchUpdateCardSecretStatus(nil, batch.ID, ListCardSecretInput{}, models.CardSecretStatusUsed)
+	if err != nil {
+		t.Fatalf("mark regular batch used failed: %v", err)
+	}
+	if affected != 2 {
+		t.Fatalf("mark regular batch used want 2 got %d", affected)
+	}
+
+	selectableBatch, created, err := svc.CreateCardSecretBatch(CreateCardSecretBatchInput{
+		ProductID:    product.ID,
+		SKUID:        defaultSKU.ID,
+		IsSelectable: true,
+		Secrets:      []string{"T20001---SECRET-201", "T20002---SECRET-202"},
+	})
+	if err != nil {
+		t.Fatalf("create selectable batch after stock cleared failed: %v", err)
+	}
+	if created != 2 {
+		t.Fatalf("selectable batch created want 2 got %d", created)
+	}
+
+	selectableIDs, err := secretRepo.ListIDsByBatchID(selectableBatch.ID)
+	if err != nil {
+		t.Fatalf("list selectable batch ids failed: %v", err)
+	}
+	selectableRows, err := secretRepo.ListByIDs(selectableIDs)
+	if err != nil {
+		t.Fatalf("list selectable rows failed: %v", err)
+	}
+	if len(selectableRows) != 2 {
+		t.Fatalf("selectable rows want 2 got %d", len(selectableRows))
+	}
+	if !selectableRows[0].IsSelectable || strings.TrimSpace(selectableRows[0].DisplaySecret) == "" {
+		t.Fatalf("selectable row should persist display secret: %+v", selectableRows[0])
+	}
+}
+
 func TestCardSecretServiceSupportsKeywordAndBatchNoFilters(t *testing.T) {
 	db := setupCardSecretServiceTestDB(t)
 

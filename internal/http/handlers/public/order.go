@@ -16,10 +16,11 @@ import (
 
 // OrderItemRequest 订单项请求
 type OrderItemRequest struct {
-	ProductID       uint   `json:"product_id" binding:"required"`
-	SKUID           uint   `json:"sku_id"`
-	Quantity        int    `json:"quantity" binding:"required"`
-	FulfillmentType string `json:"fulfillment_type"`
+	ProductID         uint   `json:"product_id" binding:"required"`
+	SKUID             uint   `json:"sku_id"`
+	Quantity          int    `json:"quantity" binding:"required"`
+	SelectedSecretIDs []uint `json:"selected_secret_ids"`
+	FulfillmentType   string `json:"fulfillment_type"`
 }
 
 // CreateOrderRequest 创建订单请求
@@ -47,10 +48,11 @@ func (h *Handler) PreviewOrder(c *gin.Context) {
 	var items []service.CreateOrderItem
 	for _, item := range req.Items {
 		items = append(items, service.CreateOrderItem{
-			ProductID:       item.ProductID,
-			SKUID:           item.SKUID,
-			Quantity:        item.Quantity,
-			FulfillmentType: item.FulfillmentType,
+			ProductID:         item.ProductID,
+			SKUID:             item.SKUID,
+			Quantity:          item.Quantity,
+			SelectedSecretIDs: item.SelectedSecretIDs,
+			FulfillmentType:   item.FulfillmentType,
 		})
 	}
 
@@ -87,10 +89,11 @@ func (h *Handler) CreateOrder(c *gin.Context) {
 	var items []service.CreateOrderItem
 	for _, item := range req.Items {
 		items = append(items, service.CreateOrderItem{
-			ProductID:       item.ProductID,
-			SKUID:           item.SKUID,
-			Quantity:        item.Quantity,
-			FulfillmentType: item.FulfillmentType,
+			ProductID:         item.ProductID,
+			SKUID:             item.SKUID,
+			Quantity:          item.Quantity,
+			SelectedSecretIDs: item.SelectedSecretIDs,
+			FulfillmentType:   item.FulfillmentType,
 		})
 	}
 
@@ -139,10 +142,11 @@ func (h *Handler) CreateOrderAndPay(c *gin.Context) {
 	var items []service.CreateOrderItem
 	for _, item := range req.Items {
 		items = append(items, service.CreateOrderItem{
-			ProductID:       item.ProductID,
-			SKUID:           item.SKUID,
-			Quantity:        item.Quantity,
-			FulfillmentType: item.FulfillmentType,
+			ProductID:         item.ProductID,
+			SKUID:             item.SKUID,
+			Quantity:          item.Quantity,
+			SelectedSecretIDs: item.SelectedSecretIDs,
+			FulfillmentType:   item.FulfillmentType,
 		})
 	}
 

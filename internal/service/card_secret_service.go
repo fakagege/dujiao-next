@@ -39,13 +39,14 @@ func NewCardSecretService(secretRepo repository.CardSecretRepository, batchRepo 
 
 // CreateCardSecretBatchInput 批量录入卡密输入
 type CreateCardSecretBatchInput struct {
-	ProductID uint
-	SKUID     uint
-	Secrets   []string
-	BatchNo   string
-	Note      string
-	Source    string
-	AdminID   uint
+	ProductID    uint
+	SKUID        uint
+	Secrets      []string
+	IsSelectable bool
+	BatchNo      string
+	Note         string
+	Source       string
+	AdminID      uint
 }
 
 // CreateCardSecretBatch 批量录入卡密
@@ -68,8 +69,14 @@ func (s *CardSecretService) CreateCardSecretBatch(input CreateCardSecretBatchInp
 	if err != nil {
 		return nil, 0, err
 	}
+	if err := s.ensureProductSelectionModeCompatible(product.ID, input.IsSelectable, 0); err != nil {
+		return nil, 0, err
+	}
 
-	normalized := normalizeSecrets(input.Secrets)
+	normalized, err := normalizeSecrets(input.Secrets, input.IsSelectable)
+	if err != nil {
+		return nil, 0, err
+	}
 	if len(normalized) == 0 {
 		return nil, 0, ErrCardSecretInvalid
 	}
@@ -110,13 +117,15 @@ func (s *CardSecretService) CreateCardSecretBatch(input CreateCardSecretBatchInp
 		items := make([]models.CardSecret, 0, len(normalized))
 		for _, secret := range normalized {
 			items = append(items, models.CardSecret{
-				ProductID: input.ProductID,
-				SKUID:     sku.ID,
-				BatchID:   &batch.ID,
-				Secret:    secret,
-				Status:    models.CardSecretStatusAvailable,
-				CreatedAt: now,
-				UpdatedAt: now,
+				ProductID:     input.ProductID,
+				SKUID:         sku.ID,
+				BatchID:       &batch.ID,
+				DisplaySecret: secret.DisplaySecret,
+				IsSelectable:  input.IsSelectable,
+				Secret:        secret.Secret,
+				Status:        models.CardSecretStatusAvailable,
+				CreatedAt:     now,
+				UpdatedAt:     now,
 			})
 		}
 		if err := secretRepo.CreateBatch(items); err != nil {
@@ -135,12 +144,13 @@ func (s *CardSecretService) CreateCardSecretBatch(input CreateCardSecretBatchInp
 
 // ImportCardSecretCSVInput 导入 CSV 输入
 type ImportCardSecretCSVInput struct {
-	ProductID uint
-	SKUID     uint
-	File      *multipart.FileHeader
-	BatchNo   string
-	Note      string
-	AdminID   uint
+	ProductID    uint
+	SKUID        uint
+	File         *multipart.FileHeader
+	IsSelectable bool
+	BatchNo      string
+	Note         string
+	AdminID      uint
 }
 
 // ImportCardSecretCSV 从 CSV 导入卡密
@@ -160,26 +170,28 @@ func (s *CardSecretService) ImportCardSecretCSV(input ImportCardSecretCSVInput) 
 		return nil, 0, ErrCardSecretImportFailed
 	}
 	return s.CreateCardSecretBatch(CreateCardSecretBatchInput{
-		ProductID: input.ProductID,
-		SKUID:     input.SKUID,
-		Secrets:   secrets,
-		BatchNo:   input.BatchNo,
-		Note:      input.Note,
-		Source:    constants.CardSecretSourceCSV,
-		AdminID:   input.AdminID,
+		ProductID:    input.ProductID,
+		SKUID:        input.SKUID,
+		Secrets:      secrets,
+		IsSelectable: input.IsSelectable,
+		BatchNo:      input.BatchNo,
+		Note:         input.Note,
+		Source:       constants.CardSecretSourceCSV,
+		AdminID:      input.AdminID,
 	})
 }
 
 // ListCardSecretInput 卡密列表输入
 type ListCardSecretInput struct {
-	ProductID uint
-	SKUID     uint
-	BatchID   uint
-	Status    string
-	Secret    string
-	BatchNo   string
-	Page      int
-	PageSize  int
+	ProductID      uint
+	SKUID          uint
+	BatchID        uint
+	Status         string
+	Secret         string
+	BatchNo        string
+	SelectableOnly bool
+	Page           int
+	PageSize       int
 }
 
 // ListCardSecrets 获取卡密列表
@@ -194,14 +206,15 @@ func (s *CardSecretService) ListCardSecrets(input ListCardSecretInput) ([]models
 	}
 
 	items, total, err := s.secretRepo.List(repository.CardSecretListFilter{
-		ProductID: input.ProductID,
-		SKUID:     input.SKUID,
-		BatchID:   input.BatchID,
-		Status:    strings.TrimSpace(input.Status),
-		Secret:    strings.TrimSpace(input.Secret),
-		BatchNo:   strings.TrimSpace(input.BatchNo),
-		Page:      input.Page,
-		PageSize:  input.PageSize,
+		ProductID:      input.ProductID,
+		SKUID:          input.SKUID,
+		BatchID:        input.BatchID,
+		Status:         strings.TrimSpace(input.Status),
+		Secret:         strings.TrimSpace(input.Secret),
+		BatchNo:        strings.TrimSpace(input.BatchNo),
+		SelectableOnly: input.SelectableOnly,
+		Page:           input.Page,
+		PageSize:       input.PageSize,
 	})
 	if err != nil {
 		return nil, 0, ErrCardSecretFetchFailed
@@ -211,14 +224,15 @@ func (s *CardSecretService) ListCardSecrets(input ListCardSecretInput) ([]models
 
 func (s *CardSecretService) buildRepositoryFilter(input ListCardSecretInput) repository.CardSecretListFilter {
 	return repository.CardSecretListFilter{
-		ProductID: input.ProductID,
-		SKUID:     input.SKUID,
-		BatchID:   input.BatchID,
-		Status:    strings.TrimSpace(input.Status),
-		Secret:    strings.TrimSpace(input.Secret),
-		BatchNo:   strings.TrimSpace(input.BatchNo),
-		Page:      input.Page,
-		PageSize:  input.PageSize,
+		ProductID:      input.ProductID,
+		SKUID:          input.SKUID,
+		BatchID:        input.BatchID,
+		Status:         strings.TrimSpace(input.Status),
+		Secret:         strings.TrimSpace(input.Secret),
+		BatchNo:        strings.TrimSpace(input.BatchNo),
+		SelectableOnly: input.SelectableOnly,
+		Page:           input.Page,
+		PageSize:       input.PageSize,
 	}
 }
 
@@ -229,7 +243,8 @@ func (s *CardSecretService) hasListFilter(input ListCardSecretInput) bool {
 		filter.BatchID > 0 ||
 		filter.Status != "" ||
 		filter.Secret != "" ||
-		filter.BatchNo != ""
+		filter.BatchNo != "" ||
+		filter.SelectableOnly
 }
 
 // BatchUpdateCardSecretStatus 批量更新卡密状态
@@ -362,7 +377,7 @@ func (s *CardSecretService) resolveBatchTargetCardSecretIDs(ids []uint, batchID 
 }
 
 // UpdateCardSecret 更新卡密
-func (s *CardSecretService) UpdateCardSecret(id uint, secret, status string) (*models.CardSecret, error) {
+func (s *CardSecretService) UpdateCardSecret(id uint, secret, status, displaySecret string, isSelectable *bool) (*models.CardSecret, error) {
 	if id == 0 {
 		return nil, ErrCardSecretInvalid
 	}
@@ -373,9 +388,38 @@ func (s *CardSecretService) UpdateCardSecret(id uint, secret, status string) (*m
 	if item == nil {
 		return nil, ErrNotFound
 	}
+	targetSelectable := item.IsSelectable
+	if isSelectable != nil {
+		targetSelectable = *isSelectable
+	}
+	if item.Status != models.CardSecretStatusUsed && targetSelectable != item.IsSelectable {
+		if err := s.ensureProductSelectionModeCompatible(item.ProductID, targetSelectable, item.ID); err != nil {
+			return nil, err
+		}
+	}
 	trimmedSecret := strings.TrimSpace(secret)
 	if trimmedSecret != "" {
 		item.Secret = trimmedSecret
+	}
+	if isSelectable != nil {
+		item.IsSelectable = *isSelectable
+		if !item.IsSelectable {
+			item.DisplaySecret = ""
+		}
+	}
+	if item.IsSelectable {
+		trimmedDisplaySecret := strings.TrimSpace(displaySecret)
+		if trimmedDisplaySecret != "" {
+			item.DisplaySecret = trimmedDisplaySecret
+		} else {
+			derivedDisplaySecret, err := deriveSelectableDisplaySecret(item.Secret)
+			if err != nil {
+				return nil, err
+			}
+			item.DisplaySecret = derivedDisplaySecret
+		}
+	} else {
+		item.DisplaySecret = ""
 	}
 	trimmedStatus := strings.TrimSpace(status)
 	if trimmedStatus != "" {
@@ -391,6 +435,53 @@ func (s *CardSecretService) UpdateCardSecret(id uint, secret, status string) (*m
 		return nil, ErrCardSecretUpdateFailed
 	}
 	return item, nil
+}
+
+func (s *CardSecretService) ensureProductSelectionModeCompatible(productID uint, selectable bool, excludeID uint) error {
+	if productID == 0 {
+		return ErrCardSecretInvalid
+	}
+	count, err := s.secretRepo.CountActiveBySelectable(productID, 0, !selectable, excludeID)
+	if err != nil {
+		return ErrCardSecretFetchFailed
+	}
+	if count > 0 {
+		return ErrCardSecretSelectionConflict
+	}
+	return nil
+}
+
+// ListSelectableCardSecrets 获取前台可自选卡密列表
+func (s *CardSecretService) ListSelectableCardSecrets(productID, skuID uint, page, pageSize int) ([]models.CardSecret, int64, error) {
+	if productID == 0 {
+		return nil, 0, ErrCardSecretInvalid
+	}
+	product, err := s.productRepo.GetByID(strings.TrimSpace(strconv.FormatUint(uint64(productID), 10)))
+	if err != nil {
+		return nil, 0, ErrProductFetchFailed
+	}
+	if product == nil {
+		return nil, 0, ErrProductNotFound
+	}
+	if !product.EnableSecretSelection || strings.TrimSpace(product.FulfillmentType) != constants.FulfillmentTypeAuto {
+		return []models.CardSecret{}, 0, nil
+	}
+	sku, err := s.resolveCardSecretSKU(productID, skuID)
+	if err != nil {
+		return nil, 0, err
+	}
+	items, total, err := s.secretRepo.List(repository.CardSecretListFilter{
+		ProductID:      productID,
+		SKUID:          sku.ID,
+		Status:         models.CardSecretStatusAvailable,
+		SelectableOnly: true,
+		Page:           page,
+		PageSize:       pageSize,
+	})
+	if err != nil {
+		return nil, 0, ErrCardSecretFetchFailed
+	}
+	return items, total, nil
 }
 
 // CardSecretStats 卡密统计
@@ -572,9 +663,31 @@ func (s *CardSecretService) resolveCardSecretSKU(productID, rawSKUID uint) (*mod
 	return nil, ErrProductSKURequired
 }
 
-func normalizeSecrets(values []string) []string {
+type normalizedCardSecret struct {
+	Secret        string
+	DisplaySecret string
+}
+
+func normalizeSecrets(values []string, isSelectable bool) ([]normalizedCardSecret, error) {
+	lines := normalizeSecretLines(values)
+	result := make([]normalizedCardSecret, 0, len(lines))
+	for _, secret := range lines {
+		item := normalizedCardSecret{Secret: secret}
+		if isSelectable {
+			displaySecret, err := deriveSelectableDisplaySecret(secret)
+			if err != nil {
+				return nil, err
+			}
+			item.DisplaySecret = displaySecret
+		}
+		result = append(result, item)
+	}
+	return result, nil
+}
+
+func normalizeSecretLines(values []string) []string {
 	seen := make(map[string]struct{})
-	var result []string
+	result := make([]string, 0)
 	for _, val := range values {
 		for _, line := range strings.Split(val, "\n") {
 			trimmed := strings.TrimSpace(line)
@@ -589,6 +702,22 @@ func normalizeSecrets(values []string) []string {
 		}
 	}
 	return result
+}
+
+func deriveSelectableDisplaySecret(secret string) (string, error) {
+	trimmedSecret := strings.TrimSpace(secret)
+	if trimmedSecret == "" {
+		return "", ErrCardSecretInvalid
+	}
+	parts := strings.SplitN(trimmedSecret, "---", 2)
+	if len(parts) != 2 {
+		return "", ErrCardSecretInvalid
+	}
+	displaySecret := strings.TrimSpace(parts[0])
+	if displaySecret == "" {
+		return "", ErrCardSecretInvalid
+	}
+	return displaySecret, nil
 }
 
 func parseCSVSecrets(reader io.Reader) ([]string, error) {
@@ -633,7 +762,7 @@ func parseCSVSecrets(reader io.Reader) ([]string, error) {
 		}
 		secrets = append(secrets, secret)
 	}
-	return normalizeSecrets(secrets), nil
+	return normalizeSecretLines(secrets), nil
 }
 
 func generateBatchNo() string {

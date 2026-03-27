@@ -79,6 +79,7 @@ func SetupRouter(cfg *config.Config, c *provider.Container) *gin.Engine {
 			public.GET("/config", publicHandler.GetConfig)
 			public.GET("/products", publicHandler.GetProducts)
 			public.GET("/products/:slug", publicHandler.GetProductBySlug)
+			public.GET("/products/:slug/selectable-secrets", publicHandler.GetSelectableSecrets)
 			public.GET("/posts", publicHandler.GetPosts)
 			public.GET("/posts/:slug", publicHandler.GetPostBySlug)
 			public.GET("/banners", publicHandler.GetPublicBanners)
